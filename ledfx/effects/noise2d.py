@@ -24,7 +24,6 @@ class Noise2d(Twod, GradientEffect):
         "background_color",
         "gradient_roll",
         "intensity",
-        "soap",
     ]
     ADVANCED_KEYS = Twod.ADVANCED_KEYS + []
 
@@ -36,10 +35,10 @@ class Noise2d(Twod, GradientEffect):
                 default=1,
             ): vol.All(vol.Coerce(float), vol.Range(min=0, max=5)),
             vol.Optional(
-                "intensity",
-                description="intensity of the effect",
-                default=128,
-            ): vol.All(vol.Coerce(int), vol.Range(min=0, max=255)),
+                "smoothness",
+                description="smoothness duh",
+                default=0.5,
+            ): vol.All(vol.Coerce(float), vol.Range(min=0, max=1)),
             vol.Optional(
                 "stretch",
                 description="Stretch of the effect",
@@ -82,6 +81,7 @@ class Noise2d(Twod, GradientEffect):
         self.zoom = self._config["zoom"]
         self.multiplier = self._config["multiplier"]
         self.soap = self._config["soap"]
+        self.smoothness = self._config["smoothness"]
 
         self.lows_impulse_filter = self.create_filter(
             alpha_decay=self._config["impulse_decay"], alpha_rise=0.99
@@ -97,7 +97,7 @@ class Noise2d(Twod, GradientEffect):
         super().do_once()
 
         if self.first_run:
-            self.noise3d = np.zeros(
+            self.noise_3d = np.zeros(
                 (self.r_height, self.r_width), dtype=np.float64
             )
             self.noise_x = random.random()
@@ -106,17 +106,39 @@ class Noise2d(Twod, GradientEffect):
             self.noise = vnoise.Noise()
             self.first_run = False
 
+            if self.r_width >= 16:
+                self.amplitude_cols = (self.r_width - 8) / 8
+            else:
+                self.amplitude_cols = 1
+
+            if self.r_height >= 16:
+                self.amplitude_rows = (self.r_height - 8) / 8
+            else:
+                self.amplitude_rows = 1
+
         self.scale_x = self.zoom / self.r_width
         self.scale_y = self.zoom / self.r_height
 
-        self.smoothness = min(250, self.intensity)
-        # self.seed_image = Image.new("RGB", (self.r_width, self.r_height))
-        # self.seed_matrix = True
+        self.seed_matrix = Image.new("RGB", (self.r_width, self.r_height))
+        self.seed_image = True
 
     def audio_data_updated(self, data):
         self.lows_impulse = self.lows_impulse_filter.update(
             data.lows_power(filtered=False) * self.multiplier
         )
+
+    def noise_to_image(self, noise):
+        ###
+        # This is the main function that will be called to generate the image
+        # The noise is a 2d array of values between 0 and 1
+        # The image is a PIL image that should be modified in place
+        ###
+
+        # map from 0,1 space into the gradient color space via our nicely vecotrised function
+        color_array = self.get_gradient_color_vectorized2d(noise).astype(np.uint8)
+
+        # transform the numpy array into a PIL image in one easy step
+        return Image.fromarray(color_array, "RGB")
 
     def draw(self):
 
@@ -133,13 +155,8 @@ class Noise2d(Twod, GradientEffect):
         # if we are pixel stuffing into a seed image, setup here
         # pixels = self.seed_image.load()
 
-        # temp logging switching, will all be removed in due course
-        log = False
-
         # generate arrays of the X adn Y axis of our plane, with a singular Z
         # this should allow libs to use any internal acceleration for unrolling across all points
-        if log:
-            start = timeit.default_timer()
 
         bass_x = self.scale_x * self.lows_impulse
         bass_y = self.scale_y * self.lows_impulse
@@ -157,9 +174,6 @@ class Noise2d(Twod, GradientEffect):
             noise_y, noise_y + scale_y * self.r_width, self.r_width
         )
         z_array = np.array([self.noise_z])
-        if log:
-            next1 = timeit.default_timer()
-            _LOGGER.info(f"array generation time: {next1 - start}")
 
         ###################################################################################
         # This is where the magic happens, calling the lib of choice to get the noise plane
@@ -167,25 +181,53 @@ class Noise2d(Twod, GradientEffect):
         # opensimplex at 128x128 on dev machine is 200 ms per frame - Unusable
         #        self.noise_3d = opensimplex.noise3array(x_array, y_array, z_array)
         # vnoise at 128x128 on dev machine is 2.5 ms per frame - Current best candidate
-        self.noise_3d = self.noise.noise3(
-            x_array, y_array, z_array, grid_mode=True
-        )
 
-        if log:
-            next2 = timeit.default_timer()
-            _LOGGER.info(f"simple noise time: {next2 - next1}")
+        new_noise = np.squeeze(self.noise.noise3(x_array, y_array, z_array, grid_mode=True))
 
-        # if the lib happens to return in a 3 dimensionsal, even though Z is depth of 1, then squeeze it down
-        self.noise_squeezed = np.squeeze(self.noise_3d)
+        if not self.soap:
+            self.noise_3d = new_noise
+        else:
+            self.noise_3d = (self.smoothness * self.noise_3d) + ((1 - self.smoothness) * new_noise)
+
         # apply the stetch param to expand the range of the color space, as noise is likely not full -1 to 1
-        # TODO: look at what color mapping does with out of range values, do we need to cap here
-        self.noise_stretched = self.noise_squeezed * self.stretch
+        noise_stretched = self.noise_3d * self.stretch
         # normalise the noise from -1,1 range to 0,1
-        self.noise_normalised = (self.noise_stretched + 1) / 2
+        noise_normalised = (noise_stretched + 1) / 2
 
-        if log:
-            next3 = timeit.default_timer()
-            _LOGGER.info(f"simple squeeze time: {next3 - next2}")
+        if self.soap and self.seed_image:
+            self.seed_matrix = self.noise_to_image(noise_normalised)
+            self.seed_image = False
+
+        if self.soap:
+            # process in the cols
+            leds_buff = np.tile(np.array([0, 0, 0]), (self.r_height, 1))
+
+            for y in range(self.r_width):
+                amount = self.noise_3d[0,y] * 2 * self.amplitude_cols
+                delta = int(abs(amount))
+                fraction = abs(amount) - delta
+                for x in range(self.r_height):
+                    if amount < 0:
+                        zD = x - delta
+                        zF = zD - 1
+                    else:
+                        zD = x + delta
+                        zF = zD + 1
+
+                    # if zD >= 0 and zD < self.r_height:
+                    #     pixel_a = self.seed_matrix.getpixel((zD, y))
+                    # else:
+                    #     pixel_a = self.get_gradient_color(noise_normalised[abs(zD),y])
+                    #
+                    # if zF >= 0 and zF < self.r_height:
+                    #     pixel_b = self.seed_matrix.getpixel((zF, y))
+                    # else:
+                    #     pixel_b = self.get_gradient_color(noise_normalised[abs(zF),y])
+
+                #     ledsbuff[x] = (PixelA.nscale8(ease8InOutApprox(255 - fraction))) + (PixelB.nscale8(ease8InOutApprox(fraction)));
+                # for (int x = 0; x < cols; x++) SEGMENT.setPixelColorXY(x, y, ledsbuff[x]);
+
+            # process in the rows
 
         # _LOGGER.info(f"x_array: {x_array}")
         # _LOGGER.info(f"y_array: {y_array}")
@@ -194,18 +236,4 @@ class Noise2d(Twod, GradientEffect):
         # _LOGGER.info(f"shape: {self.simple_n3d.shape}")
         # _LOGGER.info(f"min {np.min(self.simple_n3d)}, max {np.max(self.simple_n3d)}")
 
-        # map from 0,1 space into the gradient color space via our nicely vecotrised function
-        self.color_array = self.get_gradient_color_vectorized2d(
-            self.noise_normalised
-        ).astype(np.uint8)
-
-        if log:
-            next4 = timeit.default_timer()
-            _LOGGER.info(f"color array time: {next4 - next3}")
-
-        # transform the numpy array into a PIL image in one easy step
-        self.matrix = Image.fromarray(self.color_array, "RGB")
-
-        if log:
-            next5 = timeit.default_timer()
-            _LOGGER.info(f"image from array time: {next5 - next4}")
+        self.matrix = self.noise_to_image(noise_normalised)
