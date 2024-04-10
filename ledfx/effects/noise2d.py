@@ -15,6 +15,14 @@ _LOGGER = logging.getLogger(__name__)
 # this effect is inspired by the WLED soap effect found at
 # https://github.com/Aircoookie/WLED/blob/f513cae66eecb2c9b4e8198bd0eb52d209ee281f/wled00/FX.cpp#L7472
 
+def easeInOutQuad(t):
+    t *= 2
+    if t < 1:
+        return t * t / 2
+    else:
+        t -= 1
+        return -(t * (t - 2) - 1) / 2
+
 
 class Noise2d(Twod, GradientEffect):
     NAME = "Noise"
@@ -23,7 +31,6 @@ class Noise2d(Twod, GradientEffect):
     HIDDEN_KEYS = Twod.HIDDEN_KEYS + [
         "background_color",
         "gradient_roll",
-        "intensity",
     ]
     ADVANCED_KEYS = Twod.ADVANCED_KEYS + []
 
@@ -76,7 +83,6 @@ class Noise2d(Twod, GradientEffect):
         super().config_updated(config)
         # copy over your configs here into variables
         self.speed = self._config["speed"]
-        self.intensity = self._config["intensity"]
         self.stretch = self._config["stretch"]
         self.zoom = self._config["zoom"]
         self.multiplier = self._config["multiplier"]
@@ -106,15 +112,8 @@ class Noise2d(Twod, GradientEffect):
             self.noise = vnoise.Noise()
             self.first_run = False
 
-            if self.r_width >= 16:
-                self.amplitude_cols = (self.r_width - 8) / 8
-            else:
-                self.amplitude_cols = 1
-
-            if self.r_height >= 16:
-                self.amplitude_rows = (self.r_height - 8) / 8
-            else:
-                self.amplitude_rows = 1
+            self.amplitude_cols = self.r_width / 32
+            self.amplitude_rows = self.r_height / 32
 
         self.scale_x = self.zoom / self.r_width
         self.scale_y = self.zoom / self.r_height
@@ -136,7 +135,6 @@ class Noise2d(Twod, GradientEffect):
 
         # map from 0,1 space into the gradient color space via our nicely vecotrised function
         color_array = self.get_gradient_color_vectorized2d(noise).astype(np.uint8)
-
         # transform the numpy array into a PIL image in one easy step
         return Image.fromarray(color_array, "RGB")
 
@@ -164,6 +162,7 @@ class Noise2d(Twod, GradientEffect):
         scale_x = self.scale_x + bass_x
         scale_y = self.scale_y + bass_y
 
+        # there is something very funky in the x and y axis here, but it works
         noise_x = self.noise_x - (scale_x * self.r_height / 2)
         noise_y = self.noise_y - (scale_y * self.r_width / 2)
 
@@ -198,15 +197,19 @@ class Noise2d(Twod, GradientEffect):
             self.seed_matrix = self.noise_to_image(noise_normalised)
             self.seed_image = False
 
-        if self.soap:
-            # process in the cols
-            leds_buff = np.tile(np.array([0, 0, 0]), (self.r_height, 1))
+        # _LOGGER.info(f"matrix shape: {self.matrix.size}")
+        # _LOGGER.info(f"seed_matrix shape: {self.seed_matrix.size}")
+        # _LOGGER.info(f"noise_3d shape: {self.noise_3d.shape}")
+        # _LOGGER.info(f"r_width: {self.r_width}, r_height: {self.r_height}")
 
-            for y in range(self.r_width):
-                amount = self.noise_3d[0,y] * 2 * self.amplitude_cols
+        if self.soap:
+            leds_buff = np.tile(np.array([0, 0, 0]), (self.r_width, 1))
+
+            for y in range(self.r_height):
+                amount = self.noise_3d[y,0] * self.amplitude_cols
                 delta = int(abs(amount))
                 fraction = abs(amount) - delta
-                for x in range(self.r_height):
+                for x in range(self.r_width):
                     if amount < 0:
                         zD = x - delta
                         zF = zD - 1
@@ -214,20 +217,47 @@ class Noise2d(Twod, GradientEffect):
                         zD = x + delta
                         zF = zD + 1
 
-                    # if zD >= 0 and zD < self.r_height:
-                    #     pixel_a = self.seed_matrix.getpixel((zD, y))
-                    # else:
-                    #     pixel_a = self.get_gradient_color(noise_normalised[abs(zD),y])
-                    #
-                    # if zF >= 0 and zF < self.r_height:
-                    #     pixel_b = self.seed_matrix.getpixel((zF, y))
-                    # else:
-                    #     pixel_b = self.get_gradient_color(noise_normalised[abs(zF),y])
+                    if zD >= 0 and zD < self.r_width:
+                        pixel_a = np.array(self.seed_matrix.getpixel((zD, y)))
+                    else:
+                        pixel_a = self.get_gradient_color(noise_normalised[y, abs(zD) % self.r_width])
 
-                #     ledsbuff[x] = (PixelA.nscale8(ease8InOutApprox(255 - fraction))) + (PixelB.nscale8(ease8InOutApprox(fraction)));
-                # for (int x = 0; x < cols; x++) SEGMENT.setPixelColorXY(x, y, ledsbuff[x]);
+                    if zF >= 0 and zF < self.r_width:
+                        pixel_b = np.array(self.seed_matrix.getpixel((zF, y)))
+                    else:
+                        pixel_b = self.get_gradient_color(noise_normalised[y, abs(zF) % self.r_width])
 
-            # process in the rows
+                    leds_buff[x] = pixel_a * easeInOutQuad(1 - fraction) + pixel_b * easeInOutQuad(fraction)
+                for x in range(self.r_width):
+                    self.seed_matrix.putpixel((x, y), tuple(leds_buff[x].clip(0, 255).astype(np.uint8)))
+
+            leds_buff = np.tile(np.array([0, 0, 0]), (self.r_height, 1))
+
+            for x in range(self.r_width):
+                amount = self.noise_3d[0,x] * self.amplitude_rows
+                delta = int(abs(amount))
+                fraction = abs(amount) - delta
+                for y in range(self.r_height):
+                    if amount < 0:
+                        zD = y - delta
+                        zF = zD - 1
+                    else:
+                        zD = y + delta
+                        zF = zD + 1
+
+                    if zD >= 0 and zD < self.r_height:
+                        pixel_a = np.array(self.seed_matrix.getpixel((x, zD)))
+                    else:
+                        pixel_a = self.get_gradient_color(noise_normalised[abs(zD) % self.r_height, x])
+
+                    if zF >= 0 and zF < self.r_height:
+                        pixel_b = np.array(self.seed_matrix.getpixel((x, zF)))
+                    else:
+                        pixel_b = self.get_gradient_color(noise_normalised[abs(zF) % self.r_height, x])
+
+                    leds_buff[y] = pixel_a * easeInOutQuad(1 - fraction) + pixel_b * easeInOutQuad(fraction)
+                for y in range(self.r_height):
+                    self.seed_matrix.putpixel((x, y), tuple(leds_buff[y].clip(0, 255).astype(np.uint8)))
 
         # _LOGGER.info(f"x_array: {x_array}")
         # _LOGGER.info(f"y_array: {y_array}")
@@ -236,4 +266,7 @@ class Noise2d(Twod, GradientEffect):
         # _LOGGER.info(f"shape: {self.simple_n3d.shape}")
         # _LOGGER.info(f"min {np.min(self.simple_n3d)}, max {np.max(self.simple_n3d)}")
 
-        self.matrix = self.noise_to_image(noise_normalised)
+        if not self.soap:
+            self.matrix = self.noise_to_image(noise_normalised)
+        else:
+            self.matrix = self.seed_matrix
