@@ -16,12 +16,12 @@ _LOGGER = logging.getLogger(__name__)
 # https://github.com/Aircoookie/WLED/blob/f513cae66eecb2c9b4e8198bd0eb52d209ee281f/wled00/FX.cpp#L7472
 
 def easeInOutQuad(t):
-    t *= 2
-    if t < 1:
-        return t * t / 2
-    else:
-        t -= 1
-        return -(t * (t - 2) - 1) / 2
+    t = 2 * t
+    return np.where(
+        t < 1,
+        0.5 * t * t,
+        -0.5 * ((t - 1) * (t - 3) - 1)
+    )
 
 
 class Noise2d(Twod, GradientEffect):
@@ -183,6 +183,9 @@ class Noise2d(Twod, GradientEffect):
 
         new_noise = np.squeeze(self.noise.noise3(x_array, y_array, z_array, grid_mode=True))
 
+        if new_noise.ndim == 1:
+            new_noise = new_noise.reshape(1, -1)
+
         if not self.soap:
             self.noise_3d = new_noise
         else:
@@ -204,6 +207,31 @@ class Noise2d(Twod, GradientEffect):
 
         if self.soap:
             leds_buff = np.tile(np.array([0, 0, 0]), (self.r_width, 1))
+
+            seed_numpy = np.array(self.seed_matrix)
+            amounts_cols = self.noise_3d[:, 0] * self.amplitude_cols
+            amounts_rows = self.noise_3d[0, :] * self.amplitude_rows
+            delta_cols = np.abs(amounts_cols).astype(np.int8)
+            fractions_cols = np.abs(amounts_cols) - delta_cols
+            delta_rows = np.abs(amounts_rows).astype(np.int8)
+            fractions_rows = np.abs(amounts_rows) - delta_rows
+
+            # Calculate indices for pixel_a and pixel_b, ensuring they are within bounds
+            indices_a = np.indices(amounts_cols.shape)[0] - delta_cols[..., np.newaxis]
+            indices_b = indices_a - 1
+            indices_a = np.clip(indices_a, 0, self.r_width - 1)
+            indices_b = np.clip(indices_b, 0, self.r_width - 1)
+
+            # pixel_a = seed_numpy[np.arange(self.r_height)[:, None], indices_a]
+            # pixel_b = seed_numpy[np.arange(self.r_height)[:, None], indices_b]
+            #
+            # leds_buff = pixel_a * easeInOutQuad(
+            #     1 - fractions_cols[:, None]) + pixel_b * easeInOutQuad(
+            #     fractions_cols[:, None])
+            #
+            # self.seed_matrix = Image.fromarray(leds_buff.clip(0, 255).astype(np.uint8))
+            # self.matrix = self.seed_matrix
+
 
             for y in range(self.r_height):
                 amount = self.noise_3d[y,0] * self.amplitude_cols
