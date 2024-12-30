@@ -1436,13 +1436,13 @@ class Virtuals:
         # go through each device in the registry and work out its streaming state
         # if it has segments, but its paired virtual is not active, then it should it must be streaming
         _LOGGER.info(
-            "-------------------------------------------------------------------------------"
+            "--------------------------------------------------------------------------"
         )
         _LOGGER.info(
-            "Virtual                       is_device                    Active    Streaming "
+            "Virtual                  is_device                Active Effect     Stream"
         )
         _LOGGER.info(
-            "-------------------------------------------------------------------------------"
+            "--------------------------------------------------------------------------"
         )
 
         for virtual_id in self._ledfx.virtuals:
@@ -1452,7 +1452,12 @@ class Virtuals:
                 virtual_id in active_devices and not virtual.active
             )
 
+            if virtual.active_effect is not None:
+                effect_name = virtual.active_effect.name
+            else:
+                effect_name = "--"
+
             _LOGGER.info(
-                f"{virtual_id:<29} {str(virtual.is_device):<29}{str(virtual.active):<10}{str(virtual.streaming):<10}"
+                f"{str(virtual_id)[:24]:<24} {str(virtual.is_device)[:24]:<24} {str(virtual.active)[:7]:<7}{str(effect_name)[:10]:<10} {str(virtual.streaming)[:10]:<10}"
             )
         _LOGGER.info(f"Active Devices: {active_devices}")
