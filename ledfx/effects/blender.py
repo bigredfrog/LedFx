@@ -58,6 +58,7 @@ class BlendVirtual:
                             config=effect_config,
                         )
                         # TODO: Is there a race breaking active virtual counts?                        
+                        self.virtual.fallback_suppress_transition = True
                         self.virtual.set_effect(effect)
             else:
                 self.was_active = True
@@ -88,6 +89,7 @@ class BlendVirtual:
         return self.matrix
 
     def deactivate(self):
+        self.virtual.fallback_suppress_transition = False
         if self.initialised:
             if not self.was_active and self.virtual.active_effect:
                 self.virtual.deactivate()
