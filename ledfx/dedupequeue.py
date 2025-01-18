@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import timeit
 
 from ledfx.events import Event
 
@@ -23,6 +24,8 @@ class VisDeduplicateQ(asyncio.Queue):
 
     def __init__(self, maxsize=0):
         super().__init__(maxsize)
+        self.last_time = timeit.default_timer()
+        self.count = 0
 
     def put_nowait(self, item):
 
@@ -37,6 +40,15 @@ class VisDeduplicateQ(asyncio.Queue):
                 item.get("event_type") == Event.DEVICE_UPDATE
                 or item.get("event_type") == Event.VISUALISATION_UPDATE
             ):
+                self.count += 1
+                now = timeit.default_timer()
+                if now - self.last_time > 1:
+                    _LOGGER.info(
+                        f"Queue: {hex(id(self))} qsize {self.qsize()} count {self.count}"
+                    )
+                    self.last_time = now
+                    self.count = 0
+                    
                 # check if it is a duplicate and just return without queing if it is
                 if any(
                     self.is_similar(item, existing_item)
