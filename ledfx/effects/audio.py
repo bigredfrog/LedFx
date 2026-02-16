@@ -180,7 +180,9 @@ class AudioInputSource:
         self._timer = None
         self._last_active = None
         self._stream_error_count = 0
-        self._max_stream_errors = 10  # Consecutive errors before cleanup (166ms at 60Hz)
+        self._max_stream_errors = (
+            10  # Consecutive errors before cleanup (166ms at 60Hz)
+        )
         self._recovery_timer = None
         self._recovery_attempts = 0
         self._max_recovery_attempts = 5
