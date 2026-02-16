@@ -570,6 +570,16 @@ class AudioInputSource:
             has_critical_error = False
             status_str = str(status)
 
+            # DEBUG: Log status details during development to verify flag detection
+            _LOGGER.warning(
+                f"Audio callback status detected: {status_str} | "
+                f"priming_output={getattr(status, 'priming_output', 'N/A')} | "
+                f"input_overflow={getattr(status, 'input_overflow', 'N/A')} | "
+                f"output_underflow={getattr(status, 'output_underflow', 'N/A')} | "
+                f"input_underflow={getattr(status, 'input_underflow', 'N/A')} | "
+                f"output_overflow={getattr(status, 'output_overflow', 'N/A')}"
+            )
+
             # Check actual CallbackFlags attributes for critical errors
             # Priming output errors indicate device initialization/connection issues
             if hasattr(status, "priming_output") and status.priming_output:
