@@ -180,7 +180,7 @@ class AudioInputSource:
         self._timer = None
         self._last_active = None
         self._stream_error_count = 0
-        self._max_stream_errors = 10
+        self._max_stream_errors = 3  # Reduced from 10: faster response (50ms at 60Hz) to stop PortAudio error spam
         self._recovery_timer = None
         self._recovery_attempts = 0
         self._max_recovery_attempts = 5
@@ -577,6 +577,12 @@ class AudioInputSource:
             # Also check for "prime" substring in status string for broader compatibility
             elif "prime" in status_str.lower():
                 has_critical_error = True
+            # Buffer overflow/underflow indicates xrun conditions (device issues)
+            # These cause PortAudio ALSA error spam when Pipewire restarts
+            elif hasattr(status, "input_overflow") and status.input_overflow:
+                has_critical_error = True
+            elif hasattr(status, "output_underflow") and status.output_underflow:
+                has_critical_error = True
 
             if has_critical_error:
                 with self.lock:
@@ -592,16 +598,6 @@ class AudioInputSource:
                             daemon=True,
                         ).start()
                         return
-            # Log overflow/underflow only in debug mode (non-critical, transient issues)
-            elif _LOGGER.isEnabledFor(logging.DEBUG):
-                # Check actual attributes if available
-                if hasattr(status, "input_overflow") and status.input_overflow:
-                    _LOGGER.debug("Audio input overflow detected")
-                if (
-                    hasattr(status, "output_underflow")
-                    and status.output_underflow
-                ):
-                    _LOGGER.debug("Audio output underflow detected")
 
         # Check if stream is still active before processing (fast check, no try needed)
         if not self._audio_stream_active:

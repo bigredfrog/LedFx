@@ -121,8 +121,8 @@ class TestAudioInputSourceCleanup:
         # Create mock audio data
         in_data = np.zeros(733, dtype=np.float32).tobytes()
 
-        # Simulate multiple errors to trigger cleanup
-        for i in range(12):
+        # Simulate multiple errors to trigger cleanup (threshold is 3)
+        for i in range(5):
             # Create a mock status with error
             status = Mock()
             # Set priming_output attribute to simulate critical error
@@ -136,8 +136,8 @@ class TestAudioInputSourceCleanup:
 
         # Verify that deactivation was triggered at least once
         assert len(deactivate_called) > 0
-        # Error count should have reached or exceeded threshold before deactivation
-        assert audio_source._stream_error_count >= 10
+        # Error count should have reached or exceeded threshold (3) before deactivation
+        assert audio_source._stream_error_count >= 3
 
     def test_malformed_data_handling(self, audio_source):
         """Test that malformed audio data doesn't cause memory leaks"""
