@@ -180,7 +180,7 @@ class AudioInputSource:
         self._timer = None
         self._last_active = None
         self._stream_error_count = 0
-        self._max_stream_errors = 3  # Reduced from 10: faster response (50ms at 60Hz) to stop PortAudio error spam
+        self._max_stream_errors = 10  # Consecutive errors before cleanup (166ms at 60Hz)
         self._recovery_timer = None
         self._recovery_attempts = 0
         self._max_recovery_attempts = 5
@@ -410,13 +410,13 @@ class AudioInputSource:
             with self.lock:
                 if self._recovery_timer is not None:
                     self._recovery_timer.cancel()
-                # Wait 10 seconds before attempting recovery
+                # Wait 5 seconds before attempting recovery
                 self._recovery_timer = threading.Timer(
-                    10.0, self._attempt_recovery
+                    5.0, self._attempt_recovery
                 )
                 self._recovery_timer.start()
                 _LOGGER.info(
-                    "Audio stream recovery will be attempted in 10 seconds..."
+                    "Audio stream recovery will be attempted in 5 seconds..."
                 )
 
     def _attempt_recovery(self):
@@ -453,7 +453,7 @@ class AudioInputSource:
                         if self._recovery_timer is not None:
                             self._recovery_timer.cancel()
                         self._recovery_timer = threading.Timer(
-                            10.0, self._attempt_recovery
+                            5.0, self._attempt_recovery
                         )
                         self._recovery_timer.start()
             except Exception as e:
@@ -463,7 +463,7 @@ class AudioInputSource:
                     if self._recovery_timer is not None:
                         self._recovery_timer.cancel()
                     self._recovery_timer = threading.Timer(
-                        10.0, self._attempt_recovery
+                        5.0, self._attempt_recovery
                     )
                     self._recovery_timer.start()
 
