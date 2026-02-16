@@ -726,7 +726,6 @@ class AudioInputSource:
                 )
 
             # Pass into the phase vocoder to get a windowed FFT
-            # hasattr check only needed during initialization/teardown edge cases
             if self._phase_vocoder:
                 self._frequency_domain = self._phase_vocoder(
                     self._processed_audio_sample
