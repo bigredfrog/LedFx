@@ -581,7 +581,9 @@ class AudioInputSource:
             # These cause PortAudio ALSA error spam when Pipewire restarts
             elif hasattr(status, "input_overflow") and status.input_overflow:
                 has_critical_error = True
-            elif hasattr(status, "output_underflow") and status.output_underflow:
+            elif (
+                hasattr(status, "output_underflow") and status.output_underflow
+            ):
                 has_critical_error = True
 
             if has_critical_error:
