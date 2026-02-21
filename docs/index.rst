@@ -10,7 +10,7 @@
    /security
    /developer/developer
    /developer/architecture
-   /developer/gradient_extraction
+   /developer/guides
    /README
 
 .. toctree::
@@ -59,6 +59,7 @@
    /apis/cache
    /apis/log
    /apis/websocket
+   /apis/websocket_client
    /apis/scenes
    /apis/playlists
    /apis/global

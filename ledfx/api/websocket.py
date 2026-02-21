@@ -3,8 +3,10 @@ import binascii
 import json
 import logging
 import struct
+import time
 import uuid
 from concurrent import futures
+from typing import Any, ClassVar
 
 import numpy as np
 import pybase64
@@ -14,8 +16,10 @@ from aiohttp import web
 from ledfx.api import RestEndpoint
 from ledfx.dedupequeue import VisDeduplicateQ
 from ledfx.events import (
+    ClientBroadcastEvent,
     ClientConnectedEvent,
     ClientDisconnectedEvent,
+    ClientsUpdatedEvent,
     Event,
     SongDetectedEvent,
 )
@@ -25,12 +29,54 @@ _LOGGER = logging.getLogger(__name__)
 MAX_PENDING_MESSAGES = 256
 MAX_VAL = 32767
 
+# Phase 2: Client metadata constants
+VALID_CLIENT_TYPES = [
+    "controller",
+    "visualiser",
+    "mobile",
+    "display",
+    "api",
+    "unknown",
+]
+
+# Phase 3: Broadcasting constants
+BROADCAST_TYPES = [
+    "visualiser_control",
+    "scene_sync",
+    "color_palette",
+    "custom",
+]
+TARGET_MODES = ["all", "type", "names", "uuids"]
+MAX_PAYLOAD_SIZE = 2048
+
 BASE_MESSAGE_SCHEMA = vol.Schema(
     {
         vol.Required("id"): vol.Coerce(int),
         vol.Required("type"): str,
     },
     extra=vol.ALLOW_EXTRA,
+)
+
+# Phase 3: Broadcast message schema
+BROADCAST_SCHEMA = vol.Schema(
+    {
+        vol.Required("broadcast_type"): vol.In(BROADCAST_TYPES),
+        vol.Required("target"): vol.Schema(
+            {
+                vol.Required("mode"): vol.In(TARGET_MODES),
+                vol.Optional("value"): str,  # For mode="type"
+                vol.Optional("names"): [
+                    vol.All(str, vol.Length(min=1))
+                ],  # For mode="names"
+                vol.Optional("uuids"): [
+                    vol.All(str, vol.Length(min=1))
+                ],  # For mode="uuids"
+            },
+            extra=vol.PREVENT_EXTRA,
+        ),
+        vol.Required("payload"): dict,
+    },
+    extra=vol.PREVENT_EXTRA,
 )
 # Not all events are able to be subscribed to by the websocket
 # This dict show the events that are not subscribable and what event should be used instead
@@ -71,6 +117,11 @@ class WebsocketEndpoint(RestEndpoint):
 class WebsocketConnection:
     ip_uid_map = {}
     map_lock = asyncio.Lock()
+    # Phase 1: Class-level metadata storage
+    client_metadata: ClassVar[dict[str, dict[str, Any]]] = (
+        {}
+    )  # UUID -> metadata dict
+    metadata_lock: ClassVar[asyncio.Lock] = asyncio.Lock()
 
     def __init__(self, ledfx):
         self._ledfx = ledfx
@@ -81,6 +132,11 @@ class WebsocketConnection:
         self._sender_queue = VisDeduplicateQ(maxsize=MAX_PENDING_MESSAGES)
         self.client_ip = None
         self.uid = None
+        # Phase 1: Instance attributes for client metadata
+        self.device_id = None
+        self.client_name = None
+        self.client_type = "unknown"
+        self.connected_at = None  # Set in handle() method
 
     def close(self):
         """
@@ -185,6 +241,7 @@ class WebsocketConnection:
         """Handle the websocket connection"""
 
         self.client_ip = request.remote
+        self.connected_at = time.time()
 
         async with WebsocketConnection.map_lock:
             self.uid = str(uuid.uuid4())
@@ -253,7 +310,12 @@ class WebsocketConnection:
                 message = BASE_MESSAGE_SCHEMA(message)
 
                 if message["type"] in websocket_handlers:
-                    websocket_handlers[message["type"]](self, message)
+                    # Phase 1: Support async handlers
+                    handler = websocket_handlers[message["type"]]
+                    if asyncio.iscoroutinefunction(handler):
+                        await handler(self, message)
+                    else:
+                        handler(self, message)
                 else:
                     _LOGGER.error(
                         f"Received unknown command {message['type']}"
@@ -285,6 +347,10 @@ class WebsocketConnection:
             async with WebsocketConnection.map_lock:
                 if self.uid in WebsocketConnection.ip_uid_map:
                     del WebsocketConnection.ip_uid_map[self.uid]
+            # Phase 1: Clean up client metadata on disconnect
+            async with WebsocketConnection.metadata_lock:
+                if self.uid in WebsocketConnection.client_metadata:
+                    del WebsocketConnection.client_metadata[self.uid]
             remove_listeners()
             self.clear_subscriptions()
 
@@ -299,8 +365,355 @@ class WebsocketConnection:
             self._ledfx.events.fire_event(
                 ClientDisconnectedEvent(self.uid, self.client_ip)
             )
+            self._ledfx.events.fire_event(ClientsUpdatedEvent())
 
         return socket
+
+    # Phase 1: Metadata utility methods
+    async def _name_exists(self, name, exclude_uuid=None):
+        """Check if a client name already exists (thread-safe)"""
+        async with WebsocketConnection.metadata_lock:
+            for (
+                client_uuid,
+                meta,
+            ) in WebsocketConnection.client_metadata.items():
+                if client_uuid != exclude_uuid and meta.get("name") == name:
+                    return True
+            return False
+
+    async def _reserve_and_set_client_name(
+        self, desired_name: str
+    ) -> tuple[str, bool]:
+        """Atomically check for name conflicts, resolve them, and persist metadata.
+
+        This method acquires metadata_lock once and holds it throughout the entire
+        operation to prevent TOCTOU race conditions where multiple clients could
+        end up with the same name.
+
+        Args:
+            desired_name: The name the client wants to use
+
+        Returns:
+            Tuple of (resolved_name, name_conflict_flag)
+            - resolved_name: The actual name assigned (may have " (N)" suffix)
+            - name_conflict_flag: True if the name was modified due to conflict
+        """
+        async with WebsocketConnection.metadata_lock:
+            # Check uniqueness and resolve conflicts while holding lock
+            original_name = desired_name
+            resolved_name = desired_name
+            counter = 1
+            name_conflict = False
+
+            while True:
+                # Check if name exists (exclude self)
+                name_taken = False
+                for (
+                    client_uuid,
+                    meta,
+                ) in WebsocketConnection.client_metadata.items():
+                    if (
+                        client_uuid != self.uid
+                        and meta.get("name") == resolved_name
+                    ):
+                        name_taken = True
+                        break
+
+                if not name_taken:
+                    break
+
+                # Name conflict - increment counter
+                name_conflict = True
+                counter += 1
+                resolved_name = f"{original_name} ({counter})"
+
+            # Update instance attribute
+            self.client_name = resolved_name
+
+            # Persist metadata (still holding lock)
+            WebsocketConnection.client_metadata[self.uid] = {
+                "ip": self.client_ip,
+                "name": self.client_name,
+                "type": self.client_type,
+                "device_id": self.device_id,
+                "connected_at": self.connected_at,
+            }
+
+            return resolved_name, name_conflict
+
+    async def _update_metadata(self):
+        """Update class-level metadata storage (thread-safe)"""
+        async with WebsocketConnection.metadata_lock:
+            WebsocketConnection.client_metadata[self.uid] = {
+                "ip": self.client_ip,
+                "name": self.client_name,
+                "type": self.client_type,
+                "device_id": self.device_id,
+                "connected_at": self.connected_at,
+            }
+
+    @classmethod
+    async def get_all_clients_metadata(cls):
+        """Get deep copy of all client metadata (thread-safe)"""
+        async with cls.metadata_lock:
+            return {
+                uuid: meta.copy() for uuid, meta in cls.client_metadata.items()
+            }
+
+    @websocket_handler("set_client_info")
+    async def set_client_info_handler(self, message):
+        """Handle client metadata initialization"""
+        data = message.get("data", {})
+        device_id = data.get("device_id")
+        name = data.get("name")
+        client_type = data.get("type", "unknown")
+
+        # Validate client_type
+        if client_type not in VALID_CLIENT_TYPES:
+            _LOGGER.warning(
+                f"Invalid client_type '{client_type}' from {self.uid}, defaulting to 'unknown'"
+            )
+            client_type = "unknown"
+
+        # Generate default name if not provided
+        if not name:
+            name = f"Client-{self.uid[:8]}"
+
+        # Store device_id and type before atomic name reservation
+        self.device_id = device_id
+        self.client_type = client_type
+
+        # Atomically check, resolve conflicts, and persist metadata
+        # This prevents TOCTOU race conditions
+        resolved_name, name_conflict = await self._reserve_and_set_client_name(
+            name
+        )
+
+        # Send confirmation (after atomic operation completes)
+        self.send(
+            {
+                "id": message["id"],
+                "event_type": "client_info_updated",
+                "client_id": self.uid,
+                "name": resolved_name,
+                "type": self.client_type,
+                "name_conflict": name_conflict,
+            }
+        )
+
+        # Fire event (only after metadata is persisted)
+        self._ledfx.events.fire_event(ClientsUpdatedEvent())
+        _LOGGER.info(
+            f"Client {self.uid} set info: name='{resolved_name}', type='{self.client_type}'"
+        )
+
+    @websocket_handler("update_client_info")
+    async def update_client_info_handler(self, message):
+        """Handle client metadata updates (name and type)"""
+        data = message.get("data", {})
+        name = data.get("name")
+        client_type = data.get("type")
+
+        # Validate and normalize type if provided
+        if client_type is not None:
+            if client_type not in VALID_CLIENT_TYPES:
+                _LOGGER.warning(
+                    f"Invalid client_type '{client_type}' from {self.uid}, defaulting to 'unknown'"
+                )
+                client_type = "unknown"
+
+        # Check if any updates were provided
+        if name is None and client_type is None:
+            # No valid updates provided
+            self.send_error(message["id"], "No valid updates provided")
+            return
+
+        # Atomically update name and/or type (prevents TOCTOU race)
+        async with WebsocketConnection.metadata_lock:
+            # Check if name is already taken by another client (if name update requested)
+            if name is not None:
+                for (
+                    client_uuid,
+                    meta,
+                ) in WebsocketConnection.client_metadata.items():
+                    if client_uuid != self.uid and meta.get("name") == name:
+                        self.send_error(
+                            message["id"],
+                            f"Name '{name}' is already taken by another client",
+                        )
+                        return
+
+                # Name is available - update instance attribute
+                self.client_name = name
+
+            # Update type if provided
+            if client_type is not None:
+                self.client_type = client_type
+
+            # Persist metadata (still holding lock)
+            WebsocketConnection.client_metadata[self.uid] = {
+                "ip": self.client_ip,
+                "name": self.client_name,
+                "type": self.client_type,
+                "device_id": self.device_id,
+                "connected_at": self.connected_at,
+            }
+
+        # Send confirmation (after atomic operation completes)
+        self.send(
+            {
+                "id": message["id"],
+                "event_type": "client_info_updated",
+                "client_id": self.uid,
+                "name": self.client_name,
+                "type": self.client_type,
+            }
+        )
+
+        # Fire event
+        self._ledfx.events.fire_event(ClientsUpdatedEvent())
+
+        # Log what was updated
+        updates = []
+        if name is not None:
+            updates.append(f"name='{self.client_name}'")
+        if client_type is not None:
+            updates.append(f"type='{self.client_type}'")
+        _LOGGER.info(f"Client {self.uid} updated: {', '.join(updates)}")
+
+    # Phase 3: Broadcasting methods
+    def _filter_targets(
+        self, target_config: dict, clients: dict, sender_uuid: str
+    ) -> list[str]:
+        """Filter clients based on target configuration (fail-closed validation).
+
+        Args:
+            target_config: Targeting specification with mode and parameters
+            clients: Dictionary of connected clients {uuid: metadata}
+            sender_uuid: UUID of sender (excluded from mode='all' to prevent self-echo)
+
+        Returns:
+            List of target client UUIDs (sender excluded from mode='all')
+        """
+        mode = target_config.get("mode")
+
+        if mode == "all":
+            # Exclude sender to prevent self-echo
+            return [uuid for uuid in clients.keys() if uuid != sender_uuid]
+
+        elif mode == "type":
+            value = target_config.get("value")
+            if not value:
+                _LOGGER.warning("Target mode 'type' requires 'value' field")
+                return []
+            return [
+                client_uuid
+                for client_uuid, meta in clients.items()
+                if meta.get("type") == value
+            ]
+
+        elif mode == "names":
+            names = target_config.get("names")
+            if not names or not isinstance(names, list):
+                _LOGGER.warning("Target mode 'names' requires 'names' list")
+                return []
+            return [
+                client_uuid
+                for client_uuid, meta in clients.items()
+                if meta.get("name") in names
+            ]
+
+        elif mode == "uuids":
+            uuids = target_config.get("uuids")
+            if not uuids or not isinstance(uuids, list):
+                _LOGGER.warning("Target mode 'uuids' requires 'uuids' list")
+                return []
+            # Only return UUIDs that exist in connected clients
+            return [
+                client_uuid for client_uuid in uuids if client_uuid in clients
+            ]
+
+        else:
+            _LOGGER.warning(f"Invalid target mode: {mode}")
+            return []
+
+    @websocket_handler("broadcast")
+    async def broadcast_handler(self, message):
+        """Handle client-to-client broadcast messages (WebSocket-only)"""
+        try:
+            data = message.get("data", {})
+            # Validate against schema
+            validated_data = BROADCAST_SCHEMA(data)
+        except vol.Invalid as e:
+            self.send_error(message["id"], f"Invalid broadcast data: {e}")
+            return
+
+        # Validate payload size
+        payload = validated_data["payload"]
+        payload_bytes = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        payload_size = len(payload_bytes)
+        if payload_size > MAX_PAYLOAD_SIZE:
+            self.send_error(
+                message["id"],
+                f"Payload size ({payload_size} bytes) exceeds maximum ({MAX_PAYLOAD_SIZE} bytes)",
+            )
+            return
+
+        # Get all client metadata
+        clients = await WebsocketConnection.get_all_clients_metadata()
+
+        # Derive sender identity from WebSocket connection (server-side)
+        sender_uuid = self.uid
+        sender_name = self.client_name or f"Client-{sender_uuid[:8]}"
+        sender_type = self.client_type
+
+        # Filter targets based on target configuration
+        target_config = validated_data["target"]
+        target_uuids = self._filter_targets(
+            target_config, clients, sender_uuid
+        )
+
+        # Reject if no targets matched
+        if not target_uuids:
+            self.send_error(
+                message["id"],
+                f"No clients matched target specification: {target_config}",
+            )
+            return
+
+        # Generate unique broadcast ID
+        broadcast_id = f"b-{uuid.uuid4()}"
+
+        # Fire broadcast event (subscribers will receive it)
+        self._ledfx.events.fire_event(
+            ClientBroadcastEvent(
+                broadcast_type=validated_data["broadcast_type"],
+                broadcast_id=broadcast_id,
+                sender_uuid=sender_uuid,
+                sender_name=sender_name,
+                sender_type=sender_type,
+                target_uuids=target_uuids,
+                payload=payload,
+            )
+        )
+
+        # Log broadcast for audit
+        _LOGGER.info(
+            f"Broadcast {broadcast_id}: type={validated_data['broadcast_type']}, "
+            f"sender={sender_name} ({sender_uuid[:8]}), "
+            f"targets={len(target_uuids)} clients"
+        )
+
+        # Send success response
+        self.send(
+            {
+                "id": message["id"],
+                "event_type": "broadcast_sent",
+                "broadcast_id": broadcast_id,
+                "targets_matched": len(target_uuids),
+                "target_uuids": target_uuids,
+            }
+        )
 
     @websocket_handler("subscribe_event")
     def subscribe_event_handler(self, message):
