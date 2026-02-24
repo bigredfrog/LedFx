@@ -61,6 +61,17 @@ class HttpServer:
             path=ledfx_frontend.where() + "/modules",
             name="modules",
         )
+        self.app.router.add_static(
+            "/fonts",
+            path=ledfx_frontend.where() + "/fonts",
+            name="fonts",
+        )
+        self.app.router.add_route("get", "/fonts.css", self.fonts_css)
+
+    async def fonts_css(self, response):
+        return web.FileResponse(
+            path=ledfx_frontend.where() + "/fonts.css", status=200
+        )
 
     async def index(self, response):
         return web.FileResponse(
