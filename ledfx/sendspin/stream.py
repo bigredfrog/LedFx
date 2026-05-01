@@ -346,8 +346,7 @@ class SendspinAudioStream:
         self._flac_bit_depth = pcm.bit_depth
 
         _LOGGER.info(
-            "Creating pyFLAC StreamDecoder "
-            "(bit_depth=%d, pyflac=%s)",
+            "Creating pyFLAC StreamDecoder " "(bit_depth=%d, pyflac=%s)",
             self._flac_bit_depth,
             getattr(pyflac, "__version__", "unknown"),
         )
@@ -489,9 +488,7 @@ class SendspinAudioStream:
             self._flac_decoder.finish()
             _LOGGER.debug("FLAC decoder finish() succeeded")
         except Exception as e:
-            _LOGGER.warning(
-                "FLAC decoder finish(%s) failed: %s", reason, e
-            )
+            _LOGGER.warning("FLAC decoder finish(%s) failed: %s", reason, e)
         self._flac_decoder = None
         self._flac_fmt_logged = False
         self._flac_pending_play_time_us = 0
@@ -925,8 +922,7 @@ class SendspinAudioStream:
             await self._client.connect(server_url)
 
             _LOGGER.info(
-                "Connected to Sendspin server "
-                "(pyflac=%s, id=%s)",
+                "Connected to Sendspin server " "(pyflac=%s, id=%s)",
                 "available" if pyflac is not None else "NOT available",
                 id(self),
             )
@@ -949,9 +945,7 @@ class SendspinAudioStream:
                     pass
 
         except asyncio.CancelledError:
-            _LOGGER.debug(
-                "_connect_and_receive cancelled (id=%s)", id(self)
-            )
+            _LOGGER.debug("_connect_and_receive cancelled (id=%s)", id(self))
             raise
         except Exception as e:
             _LOGGER.warning(
