@@ -516,21 +516,7 @@ class AudioInputSource:
 
         if AudioInputSource._audio_stream_active:
             if device_changing or not self._should_always_keep_active():
-                _LOGGER.info(
-                    "update_config: deactivating (device_changing=%s, "
-                    "old=%s, new=%s, always_on=%s)",
-                    device_changing,
-                    old_device,
-                    new_device,
-                    self._should_always_keep_active(),
-                )
                 self.deactivate()
-            else:
-                _LOGGER.debug(
-                    "update_config: skipping deactivate (sendspin always-on, "
-                    "device unchanged at %s)",
-                    old_device,
-                )
 
         self._config = new_config
         # Resolve device by name if available (handles index drift across restarts)
@@ -546,10 +532,6 @@ class AudioInputSource:
         if len(self._callbacks) != 0 or should_always_on:
             if not AudioInputSource._audio_stream_active:
                 self.activate()
-            else:
-                _LOGGER.debug(
-                    "update_config: stream already active, skipping activate"
-                )
 
         # Check if device changed and fire event if needed
         with AudioInputSource._class_lock:
@@ -873,14 +855,6 @@ class AudioInputSource:
         self.deactivate()
 
     def deactivate(self):
-        _LOGGER.info(
-            "deactivate() called (stream_active=%s, subscribers=%d, "
-            "always_on=%s)",
-            AudioInputSource._audio_stream_active,
-            len(self._callbacks),
-            self._should_always_keep_active(),
-        )
-
         # Stop the stream outside the lock to avoid deadlock with audio callback
         # The audio callback thread may be waiting to complete, and if it needs
         # any locks, holding the lock while calling stop() creates a circular wait
@@ -914,26 +888,11 @@ class AudioInputSource:
             self.query_devices,
             self.query_hostapis,
         )
-        if not result:
-            _LOGGER.debug(
-                "_should_always_keep_active: False "
-                "(sendspin_always_on=%s, device_idx=%s, "
-                "is_sendspin_always_on=%s)",
-                sendspin_always_on,
-                device_idx,
-                result,
-            )
         return result
 
     def subscribe(self, callback):
         """Registers a callback with the input source"""
         self._callbacks.append(callback)
-        _LOGGER.debug(
-            "subscribe: count=%d, stream_active=%s, threshold=%d",
-            len(self._callbacks),
-            AudioInputSource._audio_stream_active,
-            self._subscriber_threshold,
-        )
         if (
             len(self._callbacks) > 0
             and not AudioInputSource._audio_stream_active
@@ -947,14 +906,6 @@ class AudioInputSource:
         """Unregisters a callback with the input source"""
         if callback in self._callbacks:
             self._callbacks.remove(callback)
-        _LOGGER.debug(
-            "unsubscribe: count=%d, stream_active=%s, threshold=%d, "
-            "always_on=%s",
-            len(self._callbacks),
-            AudioInputSource._audio_stream_active,
-            self._subscriber_threshold,
-            self._should_always_keep_active(),
-        )
         if self._should_always_keep_active():
             _LOGGER.debug(
                 "Sendspin always-on active, skipping deactivate timer"
