@@ -14,7 +14,6 @@ from typing import Callable, Optional
 import numpy as np
 
 from ledfx.sendspin.config import BUFFER_CAPACITY
-from ledfx.utils import Teleplot
 
 try:
     import pyflac
@@ -111,14 +110,6 @@ class SendspinAudioStream:
         self._leftover = np.array([], dtype=np.float32)
         self._leftover_ts = 0  # play-time (us) of leftover samples
 
-        # --- FLAC investigation: packets-per-second teleplot counter ---
-        self._pps_count = 0  # type: int
-        self._pps_last_report = time.monotonic()  # type: float
-        # Total FLAC chunks decoded since last lifecycle reset.
-        self._flac_chunks_decoded = 0  # type: int
-        # Total FLAC decode errors since last lifecycle reset.
-        self._flac_decode_errors = 0  # type: int
-
         # Heartbeat/watchdog state
         self._last_audio_chunk_time = time.monotonic()  # type: float
         self._heartbeat_task = None  # type: Optional[asyncio.Task]
@@ -146,17 +137,8 @@ class SendspinAudioStream:
         if not self._active or self._client is None:
             return
 
-        # --- FLAC investigation: packets-per-second teleplot ---
-        self._pps_count += 1
-        now_mono = time.monotonic()
-        elapsed = now_mono - self._pps_last_report
-        if elapsed >= 1.0:
-            pps = self._pps_count / elapsed
-            Teleplot.send(f"sendspin_pps:{pps:.1f}")
-            self._pps_count = 0
-            self._pps_last_report = now_mono
-
         # Heartbeat/watchdog: update last audio chunk time
+        now_mono = time.monotonic()
         self._last_audio_chunk_time = now_mono
 
         try:
@@ -184,15 +166,9 @@ class SendspinAudioStream:
                 self._flac_pending_samples_emitted = 0
                 try:
                     self._flac_decoder.process(chunk_data)
-                    self._flac_chunks_decoded += 1
                 except Exception as e:
-                    self._flac_decode_errors += 1
                     _LOGGER.warning(
-                        "Error processing FLAC audio chunk (#%d errs, "
-                        "#%d decoded so far, decoder=%s): %s",
-                        self._flac_decode_errors,
-                        self._flac_chunks_decoded,
-                        "alive" if self._flac_decoder is not None else "None",
+                        "Error processing FLAC audio chunk: %s",
                         e,
                         exc_info=True,
                     )
@@ -206,11 +182,8 @@ class SendspinAudioStream:
                 )
         except Exception as e:
             _LOGGER.warning(
-                "Error processing audio chunk (codec=%s, flac_decoded=%d, flac_errors=%d, decoder=%s): %s",
+                "Error processing audio chunk (codec=%s): %s",
                 getattr(audio_format, "codec", "unknown"),
-                self._flac_chunks_decoded,
-                self._flac_decode_errors,
-                "alive" if self._flac_decoder is not None else "None",
                 e,
                 exc_info=True,
             )
@@ -354,8 +327,6 @@ class SendspinAudioStream:
             write_callback=self._flac_write_callback,
         )
         self._flac_decoder = decoder
-        self._flac_chunks_decoded = 0
-        self._flac_decode_errors = 0
 
         # Prime the decoder with the FLAC stream header (fLaC marker +
         # STREAMINFO block) that Sendspin sends ahead of audio frames.
@@ -478,11 +449,8 @@ class SendspinAudioStream:
         if self._flac_decoder is None:
             return
         _LOGGER.info(
-            "Finishing FLAC decoder (reason=%s, "
-            "chunks_decoded=%d, decode_errors=%d)",
+            "Finishing FLAC decoder (reason=%s)",
             reason,
-            self._flac_chunks_decoded,
-            self._flac_decode_errors,
         )
         try:
             self._flac_decoder.finish()
@@ -626,11 +594,8 @@ class SendspinAudioStream:
 
         _LOGGER.info(
             "Stopping Sendspin stream "
-            "(id=%s, chunks_decoded=%d, decode_errors=%d, decoder=%s, "
-            "thread=%s, loop_running=%s)",
+            "(id=%s, decoder=%s, thread=%s, loop_running=%s)",
             id(self),
-            self._flac_chunks_decoded,
-            self._flac_decode_errors,
             "alive" if self._flac_decoder is not None else "None",
             threading.current_thread().name,
             self._loop.is_running() if self._loop else "no-loop",
@@ -826,11 +791,10 @@ class SendspinAudioStream:
                 _LOGGER.warning(
                     "Sendspin connection lost (attempt=%d), "
                     "retrying in %.0fs (decoder=%s, "
-                    "chunks_decoded=%d, exc_type=%s): %s",
+                    "exc_type=%s): %s",
                     attempt,
                     backoff,
                     "alive" if self._flac_decoder is not None else "None",
-                    self._flac_chunks_decoded,
                     type(e).__name__,
                     e,
                 )
@@ -950,10 +914,8 @@ class SendspinAudioStream:
         except Exception as e:
             _LOGGER.warning(
                 "Sendspin connection attempt failed "
-                "(decoder=%s, chunks_decoded=%d, id=%s, "
-                "exc_type=%s): %s",
+                "(decoder=%s, id=%s, exc_type=%s): %s",
                 "alive" if self._flac_decoder is not None else "None",
-                self._flac_chunks_decoded,
                 id(self),
                 type(e).__name__,
                 e,
