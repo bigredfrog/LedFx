@@ -505,17 +505,28 @@ class AudioInputSource:
 
         # Determine if the audio device is actually changing.  For Sendspin
         # always-on, avoid a destructive deactivate/reactivate cycle when
-        # only non-device settings changed (e.g. sample_rate, delay_ms).
+        # only non-pipeline settings changed (e.g. min_volume).
+        has_old_config = hasattr(self, "_config")
         old_device = (
-            self._config.get("audio_device")
-            if hasattr(self, "_config")
-            else None
+            self._config.get("audio_device") if has_old_config else None
         )
         new_device = new_config.get("audio_device")
         device_changing = old_device != new_device
 
+        # Pipeline-affecting keys require rebuilding internal audio objects
+        # (delay_queue, _raw_audio_sample, _phase_vocoder, etc.) even when
+        # the audio stream should stay active.
+        _PIPELINE_KEYS = ("delay_ms", "sample_rate", "fft_size")
+        pipeline_changing = has_old_config and any(
+            self._config.get(k) != new_config.get(k) for k in _PIPELINE_KEYS
+        )
+
         if AudioInputSource._audio_stream_active:
-            if device_changing or not self._should_always_keep_active():
+            if (
+                device_changing
+                or pipeline_changing
+                or not self._should_always_keep_active()
+            ):
                 self.deactivate()
 
         self._config = new_config

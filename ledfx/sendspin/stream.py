@@ -57,8 +57,8 @@ class SendspinAudioStream:
             Sendspin server.
     """
 
-    # Heartbeat/watchdog constants
-    _HEARTBEAT_INTERVAL = 10.0  # seconds between heartbeat logs
+    # Watchdog constants
+    _HEARTBEAT_INTERVAL = 10.0  # seconds between watchdog checks
     _WATCHDOG_TIMEOUT = 15.0  # seconds without audio before auto-reconnect
     DEFAULT_SAMPLE_RATE = 48000
 
@@ -319,7 +319,7 @@ class SendspinAudioStream:
         self._flac_bit_depth = pcm.bit_depth
 
         _LOGGER.info(
-            "Creating pyFLAC StreamDecoder " "(bit_depth=%d, pyflac=%s)",
+            "Creating pyFLAC StreamDecoder (bit_depth=%d, pyflac=%s)",
             self._flac_bit_depth,
             getattr(pyflac, "__version__", "unknown"),
         )
@@ -728,7 +728,7 @@ class SendspinAudioStream:
             _LOGGER.debug("Sendspin event loop closed (id=%s)", id(self))
 
     async def _heartbeat_watchdog_loop(self):
-        """Periodically log heartbeat and check for audio chunk receipt."""
+        """Periodically check for audio chunk receipt and reconnect if stale."""
         while self._active:
             now = time.monotonic()
             since_last = now - self._last_audio_chunk_time
@@ -744,12 +744,6 @@ class SendspinAudioStream:
                     self._reconnect_task.cancel()
                 # Reset timer so we don't spam
                 self._last_audio_chunk_time = now
-            else:
-                _LOGGER.debug(
-                    "Sendspin heartbeat: last audio %.1fs ago (id=%s)",
-                    since_last,
-                    id(self),
-                )
             await asyncio.sleep(self._HEARTBEAT_INTERVAL)
 
     async def _create_stop_event(self):
@@ -886,9 +880,7 @@ class SendspinAudioStream:
             await self._client.connect(server_url)
 
             _LOGGER.info(
-                "Connected to Sendspin server " "(pyflac=%s, id=%s)",
-                "available" if pyflac is not None else "NOT available",
-                id(self),
+                "Connected to Sendspin server",
             )
 
             # Start the playback scheduler that drains the buffer at the
