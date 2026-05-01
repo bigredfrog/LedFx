@@ -2,7 +2,6 @@ import logging
 import queue
 import threading
 import time
-import traceback
 from collections import deque
 from functools import cached_property, lru_cache
 
@@ -874,15 +873,12 @@ class AudioInputSource:
         self.deactivate()
 
     def deactivate(self):
-        # Log every deactivation with caller context for debugging
-        caller = "".join(traceback.format_stack(limit=4)[:-1]).strip()
         _LOGGER.info(
             "deactivate() called (stream_active=%s, subscribers=%d, "
-            "always_on=%s)\n  Caller: %s",
+            "always_on=%s)",
             AudioInputSource._audio_stream_active,
             len(self._callbacks),
             self._should_always_keep_active(),
-            caller,
         )
 
         # Stop the stream outside the lock to avoid deadlock with audio callback

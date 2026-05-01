@@ -43,9 +43,6 @@ _LOGGER = logging.getLogger(__name__)
 _SUB_CHUNK_SAMPLES = 800  # ~16.7 ms at 48 kHz → 60 Hz update rate
 
 
-# TODO(FLAC-DBG): Downgrade all [FLAC-DBG] _LOGGER.warning calls to
-# _LOGGER.debug / _LOGGER.info before tagging a release.
-# See: https://github.com/LedFx/LedFx/pull/1801
 class SendspinAudioStream:
     """
     Audio stream that receives Sendspin audio chunks and feeds LedFx.
@@ -173,8 +170,8 @@ class SendspinAudioStream:
                 # callback can timestamp each decoded PCM block correctly,
                 # even when one compressed chunk produces multiple blocks.
                 if self._flac_decoder is None:
-                    _LOGGER.warning(
-                        "[FLAC-DBG] Lazy-initialising FLAC decoder on first chunk "
+                    _LOGGER.info(
+                        "Initialising FLAC decoder on first chunk "
                         "(codec=%s rate=%d bit_depth=%d channels=%d)",
                         audio_format.codec,
                         audio_format.pcm_format.sample_rate,
@@ -191,7 +188,7 @@ class SendspinAudioStream:
                 except Exception as e:
                     self._flac_decode_errors += 1
                     _LOGGER.warning(
-                        "[FLAC-DBG] Error processing FLAC audio chunk (#%d errs, "
+                        "Error processing FLAC audio chunk (#%d errs, "
                         "#%d decoded so far, decoder=%s): %s",
                         self._flac_decode_errors,
                         self._flac_chunks_decoded,
@@ -348,8 +345,8 @@ class SendspinAudioStream:
         pcm = audio_format.pcm_format
         self._flac_bit_depth = pcm.bit_depth
 
-        _LOGGER.warning(
-            "[FLAC-DBG] Creating new pyFLAC StreamDecoder "
+        _LOGGER.info(
+            "Creating pyFLAC StreamDecoder "
             "(bit_depth=%d, pyflac=%s)",
             self._flac_bit_depth,
             getattr(pyflac, "__version__", "unknown"),
@@ -387,21 +384,21 @@ class SendspinAudioStream:
             self._flac_pending_samples_emitted = 0
             try:
                 decoder.process(codec_header)
-                _LOGGER.warning(
-                    "[FLAC-DBG] Stream header processed OK (%d bytes)",
+                _LOGGER.debug(
+                    "FLAC stream header processed OK (%d bytes)",
                     len(codec_header),
                 )
             except Exception as e:
                 _LOGGER.warning(
-                    "[FLAC-DBG] pyFLAC: ignoring %s while processing "
+                    "pyFLAC: ignoring %s while processing "
                     "stream header (%d bytes): %s",
                     type(e).__name__,
                     len(codec_header),
                     e,
                 )
 
-        _LOGGER.warning(
-            "[FLAC-DBG] Decoder initialized: %dHz %dch %dbit " "(header=%s)",
+        _LOGGER.info(
+            "FLAC decoder initialized: %dHz %dch %dbit (header=%s)",
             pcm.sample_rate,
             pcm.channels,
             pcm.bit_depth,
@@ -481,8 +478,8 @@ class SendspinAudioStream:
         """
         if self._flac_decoder is None:
             return
-        _LOGGER.warning(
-            "[FLAC-DBG] Finishing decoder (reason=%s, "
+        _LOGGER.info(
+            "Finishing FLAC decoder (reason=%s, "
             "chunks_decoded=%d, decode_errors=%d)",
             reason,
             self._flac_chunks_decoded,
@@ -490,10 +487,10 @@ class SendspinAudioStream:
         )
         try:
             self._flac_decoder.finish()
-            _LOGGER.warning("[FLAC-DBG] Decoder finish() succeeded")
+            _LOGGER.debug("FLAC decoder finish() succeeded")
         except Exception as e:
             _LOGGER.warning(
-                "[FLAC-DBG] Decoder finish(%s) failed: %s", reason, e
+                "FLAC decoder finish(%s) failed: %s", reason, e
             )
         self._flac_decoder = None
         self._flac_fmt_logged = False
@@ -534,15 +531,15 @@ class SendspinAudioStream:
         """
         player = stream_start_msg.payload.player
         if player:
-            _LOGGER.warning(
-                "[FLAC-DBG] Stream started: %s %dHz %dbit %dch",
+            _LOGGER.info(
+                "Sendspin stream started: %s %dHz %dbit %dch",
                 player.codec.value,
                 player.sample_rate,
                 player.bit_depth,
                 player.channels,
             )
         else:
-            _LOGGER.warning("[FLAC-DBG] Stream started (no player info)")
+            _LOGGER.info("Sendspin stream started (no player info)")
 
         # Reset pyFLAC decoder on new stream (format may have changed).
         self._finish_flac_decoder("stream start")
@@ -563,8 +560,8 @@ class SendspinAudioStream:
         with self._buffer_lock:
             buf_len = len(self._chunk_buffer)
             self._chunk_buffer.clear()
-        _LOGGER.warning(
-            "[FLAC-DBG] Playback buffer cleared (stream/clear, "
+        _LOGGER.info(
+            "Playback buffer cleared (stream/clear, "
             "roles=%s, discarded_chunks=%d)",
             roles,
             buf_len,
@@ -602,8 +599,8 @@ class SendspinAudioStream:
             _LOGGER.warning("Sendspin stream already active")
             return
 
-        _LOGGER.warning(
-            "[FLAC-DBG] Starting Sendspin stream (id=%s, thread=%s)...",
+        _LOGGER.info(
+            "Starting Sendspin stream (id=%s, thread=%s)...",
             id(self),
             threading.current_thread().name,
         )
@@ -630,8 +627,8 @@ class SendspinAudioStream:
             )
             return
 
-        _LOGGER.warning(
-            "[FLAC-DBG] Stopping Sendspin stream "
+        _LOGGER.info(
+            "Stopping Sendspin stream "
             "(id=%s, chunks_decoded=%d, decode_errors=%d, decoder=%s, "
             "thread=%s, loop_running=%s)",
             id(self),
@@ -677,9 +674,7 @@ class SendspinAudioStream:
 
         if not self._thread or not self._thread.is_alive():
             self._finish_flac_decoder("close")
-            _LOGGER.warning(
-                "[FLAC-DBG] Sendspin stream closed (thread already gone)"
-            )
+            _LOGGER.info("Sendspin stream closed (thread already gone)")
             return
 
         # Wait for the thread to exit.  The reconnect_task cancellation
@@ -712,7 +707,7 @@ class SendspinAudioStream:
         self._loop = None
         self._heartbeat_task = None
 
-        _LOGGER.warning("[FLAC-DBG] Sendspin stream closed (id=%s)", id(self))
+        _LOGGER.info("Sendspin stream closed (id=%s)", id(self))
 
     def _run_client(self):
         """Background thread running asyncio event loop with reconnect.
@@ -776,8 +771,8 @@ class SendspinAudioStream:
             now = time.monotonic()
             since_last = now - self._last_audio_chunk_time
             if since_last > self._WATCHDOG_TIMEOUT:
-                _LOGGER.error(
-                    "[FLAC-DBG] Sendspin watchdog: No audio received for %.1fs (id=%s). Triggering reconnect.",
+                _LOGGER.warning(
+                    "Sendspin watchdog: No audio received for %.1fs (id=%s). Triggering reconnect.",
                     since_last,
                     id(self),
                 )
@@ -788,8 +783,8 @@ class SendspinAudioStream:
                 # Reset timer so we don't spam
                 self._last_audio_chunk_time = now
             else:
-                _LOGGER.info(
-                    "[FLAC-DBG] Sendspin heartbeat: last audio %.1fs ago (id=%s)",
+                _LOGGER.debug(
+                    "Sendspin heartbeat: last audio %.1fs ago (id=%s)",
                     since_last,
                     id(self),
                 )
@@ -814,15 +809,15 @@ class SendspinAudioStream:
                 # Only exit if self._active is False (i.e., explicit stop/close)
                 if not self._active:
                     _LOGGER.info(
-                        "[FLAC-DBG] Reconnect loop cancelled (attempt=%d, active=%s)",
+                        "Reconnect loop cancelled (attempt=%d, active=%s)",
                         attempt,
                         self._active,
                     )
                     raise  # Propagate so _run_client sees CancelledError
                 else:
                     # Watchdog or internal reconnect: just continue loop
-                    _LOGGER.warning(
-                        "[FLAC-DBG] Reconnect task cancelled by watchdog or reconnect (attempt=%d, id=%s), restarting connect.",
+                    _LOGGER.info(
+                        "Reconnect task cancelled by watchdog (attempt=%d, id=%s), restarting connect.",
                         attempt,
                         id(self),
                     )
@@ -832,7 +827,7 @@ class SendspinAudioStream:
                 if not self._active:
                     break
                 _LOGGER.warning(
-                    "[FLAC-DBG] Connection lost (attempt=%d), "
+                    "Sendspin connection lost (attempt=%d), "
                     "retrying in %.0fs (decoder=%s, "
                     "chunks_decoded=%d, exc_type=%s): %s",
                     attempt,
@@ -871,8 +866,8 @@ class SendspinAudioStream:
         if self._stop_event is None:
             self._stop_event = asyncio.Event()
 
-        _LOGGER.warning(
-            "[FLAC-DBG] Connecting to Sendspin server: %s as '%s' (id=%s)",
+        _LOGGER.info(
+            "Connecting to Sendspin server: %s as '%s' (id=%s)",
             server_url,
             client_name,
             id(self),
@@ -929,8 +924,8 @@ class SendspinAudioStream:
             # Connect to server
             await self._client.connect(server_url)
 
-            _LOGGER.warning(
-                "[FLAC-DBG] Connected to Sendspin server "
+            _LOGGER.info(
+                "Connected to Sendspin server "
                 "(pyflac=%s, id=%s)",
                 "available" if pyflac is not None else "NOT available",
                 id(self),
@@ -954,13 +949,13 @@ class SendspinAudioStream:
                     pass
 
         except asyncio.CancelledError:
-            _LOGGER.info(
-                "[FLAC-DBG] _connect_and_receive cancelled (id=%s)", id(self)
+            _LOGGER.debug(
+                "_connect_and_receive cancelled (id=%s)", id(self)
             )
             raise
         except Exception as e:
             _LOGGER.warning(
-                "[FLAC-DBG] Connection attempt failed "
+                "Sendspin connection attempt failed "
                 "(decoder=%s, chunks_decoded=%d, id=%s, "
                 "exc_type=%s): %s",
                 "alive" if self._flac_decoder is not None else "None",
