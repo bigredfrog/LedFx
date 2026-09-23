@@ -27,15 +27,11 @@ def create_menu_item(text, callback=None, default=False, enabled=True):
     if sys.platform == "darwin":
         from ledfx.mac_tray import MenuItem
 
-        return MenuItem(
-            text, callback, default=default, enabled=enabled
-        )
+        return MenuItem(text, callback, default=default, enabled=enabled)
 
     import pystray
 
-    return pystray.MenuItem(
-        text, callback, default=default, enabled=enabled
-    )
+    return pystray.MenuItem(text, callback, default=default, enabled=enabled)
 
 
 def menu_separator():
