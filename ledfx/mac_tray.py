@@ -4,6 +4,7 @@ import threading
 
 import AppKit
 import Foundation
+import objc
 from PIL import Image
 
 
@@ -45,7 +46,7 @@ class _MainThreadDispatcher(Foundation.NSObject):
 
 class _MenuDelegate(Foundation.NSObject):
     def initWithIcon_(self, icon):
-        self = Foundation.NSObject.init(self)
+        self = objc.super(_MenuDelegate, self).init()
         self.icon = icon
         return self
 
