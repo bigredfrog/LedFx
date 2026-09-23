@@ -17,6 +17,7 @@ import sys
 from logging.handlers import RotatingFileHandler
 
 from ledfx.sentry_config import setup_sentry
+from ledfx.tray import create_icon
 
 try:
     import psutil
@@ -280,20 +281,16 @@ def main():
     if (args.tray or currently_frozen()) and not args.no_tray:
         # If pystray is imported on a device that can't display it, it explodes. Catch it
         try:
-            import pystray
+            from PIL import Image
+            icon_location = get_icon_path("tray.png")
+            icon = create_icon(
+                "LedFx", icon=Image.open(icon_location), title="LedFx"
+            )
         except Exception as Error:
             msg = f"Unable to create tray icon. Error: {Error}. Try launching LedFx via --no-tray option."
             _LOGGER.critical(msg)
             # Exit with code 3 to indicate that there was an error creating the tray icon.
             sys.exit(3)
-
-        from PIL import Image
-
-        icon_location = get_icon_path("tray.png")
-
-        icon = pystray.Icon(
-            "LedFx", icon=Image.open(icon_location), title="LedFx"
-        )
     else:
         icon = None
 

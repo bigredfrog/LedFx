@@ -1,10 +1,12 @@
+import sys
+
+
 hiddenimports = [
     "sacn",
     "rtmidi.midiutil",
     "paho",
     "paho.mqtt",
     "paho.mqtt.client",
-    "pystray._win32",
     "rtmidi",
     "samplerate",
     "sounddevice",
@@ -55,3 +57,6 @@ hiddenimports = [
     "lifx.protocol",
     "lifx.protocol.packets",
 ]
+
+if sys.platform == "win32":
+    hiddenimports.append("pystray._win32")

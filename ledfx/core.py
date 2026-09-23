@@ -50,6 +50,7 @@ from ledfx.presets import ledfx_presets
 from ledfx.scenes import Scenes
 from ledfx.sendspin.config import eager_start as sendspin_eager_start
 from ledfx.tools.ts_generator import generate_typescript_types
+from ledfx.tray import create_menu, create_menu_item, menu_separator
 from ledfx.utils import (
     RollingQueueHandler,
     UpdateChecker,
@@ -320,18 +321,16 @@ class LedFxCore:
             )
 
     def setup_icon_menu(self):
-        import pystray
-
-        self.icon.menu = pystray.Menu(
-            pystray.MenuItem(
+        self.icon.menu = create_menu(
+            create_menu_item(
                 f"LedFx - {PROJECT_VERSION}", None, enabled=False
             ),
-            pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Open", self.open_ui, default=True),
-            pystray.MenuItem(
+            menu_separator(),
+            create_menu_item("Open", self.open_ui, default=True),
+            create_menu_item(
                 "Check for Update", self.check_and_notify_updates
             ),
-            pystray.MenuItem("Quit Ledfx", self.stop),
+            create_menu_item("Quit Ledfx", self.stop),
         )
 
     def setup_visualisation_events(self):
