@@ -1,6 +1,5 @@
 import sys
 
-
 hiddenimports = [
     "sacn",
     "rtmidi.midiutil",

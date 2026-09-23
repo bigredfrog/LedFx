@@ -282,6 +282,7 @@ def main():
         # If pystray is imported on a device that can't display it, it explodes. Catch it
         try:
             from PIL import Image
+
             icon_location = get_icon_path("tray.png")
             icon = create_icon(
                 "LedFx", icon=Image.open(icon_location), title="LedFx"

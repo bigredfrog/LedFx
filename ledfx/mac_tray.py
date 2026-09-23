@@ -52,6 +52,7 @@ class _MenuDelegate(Foundation.NSObject):
     def activateMenuItem_(self, item):
         self.icon._activate_menu_item(item.tag())
 
+
 class Icon:
     HAS_NOTIFICATION = True
 
@@ -165,8 +166,10 @@ class Icon:
         if item is Menu.SEPARATOR:
             return AppKit.NSMenuItem.separatorItem()
 
-        native_item = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-            item.text, b"activateMenuItem:", ""
+        native_item = (
+            AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                item.text, b"activateMenuItem:", ""
+            )
         )
         native_item.setTarget_(self._delegate)
         native_item.setTag_(len(self._menu_callbacks))
