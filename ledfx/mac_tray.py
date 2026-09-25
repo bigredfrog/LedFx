@@ -18,35 +18,33 @@ class _MainThreadCall(Foundation.NSObject):
         self.error = None
         return self
 
-    def run(self):
-        try:
-            self.result = self.callback()
-        except BaseException as error:
-            self.error = error
-        finally:
-            self.event.set()
-
 
 class _MainThreadDispatcher(Foundation.NSObject):
-    """Dispatch callbacks through Cocoa's main-thread run loop."""
+    """Expose the selector used to run callbacks on the main thread."""
 
     def runCall_(self, call):
-        call.run()
+        try:
+            call.result = call.callback()
+        except BaseException as error:
+            call.error = error
+        finally:
+            call.event.set()
 
-    def dispatch(self, callback):
-        """Run a callback on the main thread and return or re-raise its result."""
 
-        if threading.current_thread() is threading.main_thread():
-            return callback()
+def _dispatch_to_main_thread(dispatcher, callback):
+    """Run a callback on Cocoa's main thread and return its result."""
 
-        call = _MainThreadCall.alloc().initWithCallback_(callback)
-        self.performSelectorOnMainThread_withObject_waitUntilDone_(
-            "runCall:", call, False
-        )
-        call.event.wait()
-        if call.error:
-            raise call.error
-        return call.result
+    if threading.current_thread() is threading.main_thread():
+        return callback()
+
+    call = _MainThreadCall.alloc().initWithCallback_(callback)
+    dispatcher.performSelectorOnMainThread_withObject_waitUntilDone_(
+        "runCall:", call, False
+    )
+    call.event.wait()
+    if call.error:
+        raise call.error
+    return call.result
 
 
 class Icon(pystray.Icon):
@@ -59,7 +57,7 @@ class Icon(pystray.Icon):
     def _dispatch(self, callback):
         """Synchronously dispatch a pystray backend operation."""
 
-        return self._main_thread_dispatcher.dispatch(callback)
+        return _dispatch_to_main_thread(self._main_thread_dispatcher, callback)
 
     def _show(self):
         """Show the tray icon on the Cocoa main thread."""
